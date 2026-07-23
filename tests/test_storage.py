@@ -29,11 +29,26 @@ async def test_interrupted_creation_is_not_retried_or_blocked(tmp_path: Path):
     await storage.initialize()
     session = Session(1, 2, "meeting", "source", [Task("one", status="creating")], phase="confirm")
     await storage.save(session)
-    # A new Storage instance simulates process restart.
-    recovered = await Storage(storage.path).load(1)
+    # Startup of a new Storage instance simulates process restart.
+    restarted = Storage(storage.path)
+    await restarted.initialize()
+    recovered = await restarted.load(1)
     assert recovered.tasks[0].status == "failed"
     assert "проверьте Trello" in recovered.tasks[0].last_error
     assert (await Storage(storage.path).load(1)).tasks[0].status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_loading_does_not_fail_creation_in_progress(tmp_path: Path):
+    storage = Storage(tmp_path / "bot.sqlite3")
+    await storage.initialize()
+    session = Session(1, 2, "meeting", "source", [Task("one", status="creating")])
+    await storage.save(session)
+
+    loaded = await storage.load(1)
+
+    assert loaded.tasks[0].status == "creating"
+    assert loaded.tasks[0].last_error is None
 
 
 @pytest.mark.asyncio
