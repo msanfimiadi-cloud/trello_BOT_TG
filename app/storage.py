@@ -34,6 +34,7 @@ class Storage:
         await asyncio.to_thread(self._execute, "CREATE TABLE IF NOT EXISTS admin_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_user_id INTEGER NOT NULL, target_user_id INTEGER NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)", ())
         await asyncio.to_thread(self._execute, "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)", ())
         await asyncio.to_thread(self._ensure_user_link_columns)
+        await asyncio.to_thread(self._recover_interrupted_creations)
         if admin_user_id is not None:
             await asyncio.to_thread(self._execute, "INSERT INTO users(telegram_user_id,is_active,is_admin) VALUES(?,1,1) ON CONFLICT(telegram_user_id) DO UPDATE SET is_active=1,is_admin=1,updated_at=CURRENT_TIMESTAMP", (admin_user_id,))
             await asyncio.to_thread(self._migrate_allowlist, admin_user_id, legacy_user_ids)
@@ -48,6 +49,33 @@ class Storage:
             if "trello_display_name" not in columns:
                 connection.execute("ALTER TABLE users ADD COLUMN trello_display_name TEXT")
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_trello_member_id_unique ON users(trello_member_id) WHERE trello_member_id IS NOT NULL")
+
+    def _recover_interrupted_creations(self) -> None:
+        """Mark only creations left behind by a previous process as failed.
+
+        Recovery belongs to startup rather than ``load``: changing a live
+        ``creating`` task while another coroutine is waiting for Trello could
+        otherwise race with the successful response and expose a retry button.
+        """
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute(
+                "SELECT user_id,data FROM sessions WHERE active=1"
+            ).fetchall()
+            for user_id, raw_data in rows:
+                session = Session.from_dict(json.loads(raw_data))
+                changed = False
+                for task in session.tasks:
+                    if task.status == "creating":
+                        task.status = "failed"
+                        task.last_error = (
+                            "Создание было прервано; проверьте Trello перед повтором"
+                        )
+                        changed = True
+                if changed:
+                    connection.execute(
+                        "UPDATE sessions SET data=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                        (json.dumps(session.to_dict(), ensure_ascii=False), user_id),
+                    )
 
     def _migrate_team(self, team: dict[str, str]) -> None:
         """One-time best-effort migration from the former display-name mapping."""
@@ -82,19 +110,7 @@ class Storage:
         rows = await asyncio.to_thread(self._execute, "SELECT data FROM sessions WHERE user_id=? AND active=1", (user_id,))
         if not rows:
             return None
-        session = Session.from_dict(json.loads(rows[0][0]))
-        # A process may die after persisting `creating`, while the remote result is
-        # unknowable.  Never retry automatically: expose it as a failed task so a
-        # human can decide whether to retry after checking Trello.
-        changed = False
-        for task in session.tasks:
-            if task.status == "creating":
-                task.status = "failed"
-                task.last_error = "Создание было прервано; проверьте Trello перед повтором"
-                changed = True
-        if changed:
-            await self.save(session)
-        return session
+        return Session.from_dict(json.loads(rows[0][0]))
 
     async def cancel(self, user_id: int) -> None:
         await asyncio.to_thread(self._execute, "UPDATE sessions SET active=0,updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (user_id,))

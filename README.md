@@ -45,9 +45,10 @@ set -a; source .env; set +a
 python -m app.bot
 ```
 
-Тесты не обращаются к настоящему Trello:
+Для разработки установите тестовые зависимости. Тесты не обращаются к настоящему Trello:
 
 ```bash
+pip install -r requirements-dev.txt
 pytest -q
 ```
 
