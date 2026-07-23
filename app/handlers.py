@@ -7,9 +7,10 @@ from html import escape
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from .auth import access_required, admin_required
 from .config import Settings
 from .dates import display_date, parse_date
-from .keyboards import assignee_keyboard, confirmation_keyboard, deadline_keyboard, preview_keyboard, retry_keyboard
+from .keyboards import admin_users_keyboard, assignee_keyboard, confirmation_keyboard, deadline_keyboard, preview_keyboard, retry_keyboard
 from .models import Session, Task
 from .parser import card_description, card_title, parse_meeting
 from .storage import Storage
@@ -23,11 +24,11 @@ class BotHandlers:
     def __init__(self, settings: Settings, storage: Storage, trello: TrelloClient):
         self.settings, self.storage, self.trello = settings, storage, trello
 
-    def allowed(self, update: Update) -> bool:
-        return bool(update.effective_user and update.effective_user.id in self.settings.allowed_user_ids)
-
     async def require_allowed(self, update: Update) -> bool:
-        if self.allowed(update):
+        user = update.effective_user
+        if user:
+            await self.storage.touch_user(user.id, user.username, user.full_name)
+        if user and await self.storage.has_access(user.id):
             return True
         if update.callback_query:
             await update.callback_query.answer("Нет доступа", show_alert=True)
@@ -35,23 +36,71 @@ class BotHandlers:
             await update.effective_message.reply_text("У вас нет доступа к этому внутреннему боту.")
         return False
 
+    async def require_admin(self, update: Update) -> bool:
+        user = update.effective_user
+        if user:
+            await self.storage.touch_user(user.id, user.username, user.full_name)
+        if user and await self.storage.is_admin(user.id):
+            return True
+        if update.callback_query:
+            await update.callback_query.answer("Только для администратора", show_alert=True)
+        elif update.effective_message:
+            await update.effective_message.reply_text("Команда доступна только администратору.")
+        return False
+
+    async def myid(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        if user:
+            await self.storage.touch_user(user.id, user.username, user.full_name)
+            await update.effective_message.reply_text(f"Ваш Telegram user ID: {user.id}")
+
+    @admin_required
+    async def admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        args = context.args
+        if args and args[0].lower() in {"add", "grant", "remove", "revoke"}:
+            if len(args) != 2:
+                await update.effective_message.reply_text("Использование: /admin add <user_id> или /admin revoke <user_id>"); return
+            try: target_id = int(args[1])
+            except ValueError:
+                await update.effective_message.reply_text("user_id должен быть целым числом."); return
+            active = args[0].lower() in {"add", "grant"}
+            changed = await self.storage.set_access(update.effective_user.id, target_id, active)
+            logger.info("admin_access_changed admin_user_id=%s target_user_id=%s active=%s changed=%s", update.effective_user.id, target_id, active, changed)
+            await update.effective_message.reply_text(("Доступ выдан." if active else "Доступ отозван.") if changed else "Нельзя отозвать доступ администратора.")
+        await self._show_admin_page(update, 0)
+
+    async def _show_admin_page(self, update: Update, page: int) -> None:
+        users, total = await self.storage.list_users(max(page, 0))
+        pages = max(1, (total + 7) // 8); page = min(max(page, 0), pages - 1)
+        if page and not users: users, total = await self.storage.list_users(page)
+        lines = [f"Пользователи — страница {page + 1}/{pages}:"]
+        for user in users:
+            label = user.full_name or (f"@{user.username}" if user.username else "без имени")
+            status = "администратор" if user.is_admin else ("доступ есть" if user.is_active else "доступа нет")
+            lines.append(f"• {user.telegram_user_id} — {label} — {status}")
+        markup = admin_users_keyboard(users, page, pages)
+        if update.callback_query:
+            await update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup)
+        else:
+            await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
+
+    @access_required
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         await update.effective_message.reply_text("Я превращаю итоги встречи в отдельные карточки Trello.\n\nПример:\n" + EXAMPLE)
 
+    @access_required
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         await update.effective_message.reply_text("Первая непустая строка — название встречи. Далее используйте 1., 1), 1 - или 1.Задача. Переносы внутри пункта сохраняются.\n\n" + EXAMPLE)
 
+    @access_required
     async def new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         await self.storage.cancel(update.effective_user.id)
         await update.effective_message.reply_text("Текущая сессия отменена. Пришлите новый текст встречи.")
 
     cancel = new
 
+    @access_required
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         session = await self.storage.load(update.effective_user.id)
         if not session:
             await update.effective_message.reply_text("Нет активной встречи."); return
@@ -59,8 +108,8 @@ class BotHandlers:
         skipped = sum(t.status == "skipped" for t in session.tasks)
         await update.effective_message.reply_text(f"Встреча: {session.meeting_title}\nПрогресс: {min(session.current_index + 1, len(session.tasks))} из {len(session.tasks)}\nСоздано: {created}, пропущено: {skipped}")
 
+    @access_required
     async def check_trello(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         try:
             info = await self.trello.check_ready()
             await update.effective_message.reply_text(f"Trello доступен ✅\nСписок: {info.get('name', 'настроенный список')}")
@@ -68,8 +117,8 @@ class BotHandlers:
             logger.exception("trello_check_failed user_id=%s error_class=%s", update.effective_user.id, type(exc).__name__)
             await update.effective_message.reply_text(f"Проверка Trello не пройдена: {exc}")
 
+    @access_required
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self.require_allowed(update): return
         session = await self.storage.load(update.effective_user.id)
         if session and session.phase == "await_date":
             await self._date_text(update, session); return
@@ -87,8 +136,20 @@ class BotHandlers:
         await update.effective_message.reply_text(f"Встреча: {title}\n\nНайденные задачи:\n\n{preview}", reply_markup=preview_keyboard())
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query.data.startswith("admin:"):
+            if not await self.require_admin(update): return
+            await query.answer()
+            parts = query.data.split(":")
+            if parts[1] == "page":
+                await self._show_admin_page(update, int(parts[2])); return
+            target_id, page = int(parts[2]), int(parts[3])
+            active = not await self.storage.has_access(target_id)
+            changed = await self.storage.set_access(update.effective_user.id, target_id, active)
+            logger.info("admin_access_changed admin_user_id=%s target_user_id=%s active=%s changed=%s", update.effective_user.id, target_id, active, changed)
+            await self._show_admin_page(update, page); return
         if not await self.require_allowed(update): return
-        query = update.callback_query; await query.answer()
+        await query.answer()
         session = await self.storage.load(update.effective_user.id)
         if not session:
             await query.message.reply_text("Сессия не найдена. Пришлите текст встречи заново."); return
