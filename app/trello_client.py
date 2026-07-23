@@ -67,6 +67,27 @@ class TrelloClient:
             raise TrelloError("Trello не вернул ID созданной карточки")
         return result
 
+    async def find_card_by_reference(self, task_reference: str) -> dict[str, Any] | None:
+        """Find an already-created card after an ambiguous create response.
+
+        Trello has no idempotency key for card creation.  The reference is
+        embedded in the description, so checking the target list immediately
+        before every attempt makes manual retries safe after most timeouts and
+        process restarts.
+        """
+        marker = f"Системный ID задачи: {task_reference}"
+        cards = await self._request(
+            "GET",
+            f"/lists/{self.list_id}/cards",
+            params={"fields": "id,name,url,shortUrl,desc,due", "filter": "all"},
+        )
+        if not isinstance(cards, list):
+            raise TrelloError("Trello вернул неожиданный список карточек")
+        return next(
+            (card for card in cards if isinstance(card, dict) and marker in str(card.get("desc", ""))),
+            None,
+        )
+
     async def get_members(self) -> list[dict[str, Any]]:
         board_id = (await self.check_list()).get("idBoard")
         if not board_id:

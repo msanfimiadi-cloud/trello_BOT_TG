@@ -50,6 +50,31 @@ async def test_create_card_payload_and_iso_due():
 
 
 @pytest.mark.asyncio
+async def test_find_card_by_reference_prevents_duplicate_retry():
+    async def handler(request):
+        assert request.url.path == "/1/lists/list/cards"
+        assert request.url.params["filter"] == "all"
+        return httpx.Response(
+            200,
+            json=[
+                {"id": "other", "desc": "ordinary card"},
+                {
+                    "id": "existing",
+                    "url": "https://trello.com/c/existing",
+                    "desc": "Text\n\nСистемный ID задачи: task-uuid",
+                },
+            ],
+        )
+
+    client, old = client_with(handler)
+    await old.aclose()
+    card = await client.find_card_by_reference("task-uuid")
+    assert card["id"] == "existing"
+    assert await client.find_card_by_reference("missing") is None
+    await client.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])
 async def test_http_errors_are_safe(status):
     client, old = client_with(lambda request: httpx.Response(status, json={"token": "secret-token"}))

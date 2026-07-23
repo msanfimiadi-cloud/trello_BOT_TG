@@ -135,7 +135,12 @@ class BotHandlers:
 
     async def show_confirmation(self, update: Update, session: Session) -> None:
         task = session.tasks[session.current_index]
-        description = card_description(session.meeting_title, task.text, task.assignee if task.manual_assignee else None)
+        description = card_description(
+            session.meeting_title,
+            task.text,
+            task.assignee if task.manual_assignee else None,
+            task.uuid,
+        )
         assignee = "без ответственного" if not task.assignee else (f"{task.assignee} — имя указано только текстом ⚠️" if task.manual_assignee else task.assignee)
         await update.effective_message.reply_text(f"Задача {session.current_index + 1} из {len(session.tasks)}\n\nНазвание:\n{card_title(task.text)}\n\nОписание:\n{description}\n\nДедлайн:\n{display_date(task.deadline)}\n\nОтветственный:\n{assignee}", reply_markup=confirmation_keyboard())
 
@@ -151,7 +156,17 @@ class BotHandlers:
                 return
             await update.callback_query.edit_message_reply_markup(None); task.status = "creating"; await self.storage.save(session)
             try:
-                card = await self.trello.create_card(card_title(task.text), card_description(session.meeting_title, task.text, task.assignee if task.manual_assignee else None), task.deadline, task.member_id)
+                card = await self.trello.find_card_by_reference(task.uuid)
+                if card is None:
+                    description = card_description(
+                        session.meeting_title,
+                        task.text,
+                        task.assignee if task.manual_assignee else None,
+                        task.uuid,
+                    )
+                    card = await self.trello.create_card(
+                        card_title(task.text), description, task.deadline, task.member_id
+                    )
             except TrelloError as exc:
                 task.status, task.last_error = "failed", str(exc); await self.storage.save(session)
                 logger.exception("card_create_failed user_id=%s task_uuid=%s error_class=%s", session.user_id, task.uuid, type(exc).__name__)

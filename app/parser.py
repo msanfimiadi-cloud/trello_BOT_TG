@@ -38,8 +38,17 @@ def card_title(task_text: str, maximum: int = 150) -> str:
     return shortened or first[:maximum]
 
 
-def card_description(meeting: str, text: str, manual_name: str | None = None) -> str:
+def card_description(
+    meeting: str,
+    text: str,
+    manual_name: str | None = None,
+    task_reference: str | None = None,
+) -> str:
     result = f"Из встречи: {meeting}\n\nИсходный текст:\n{text}"
     if manual_name:
         result += f"\n\nОтветственный, указанный вручную:\n{manual_name}"
+    if task_reference:
+        # The stable marker lets us reconcile an ambiguous network timeout with
+        # Trello before retrying, instead of creating the same card twice.
+        result += f"\n\nСистемный ID задачи: {task_reference}"
     return result
