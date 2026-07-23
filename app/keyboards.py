@@ -29,3 +29,16 @@ def confirmation_keyboard() -> InlineKeyboardMarkup:
 
 def retry_keyboard() -> InlineKeyboardMarkup:
     return keyboard([[('Повторить', 'card:create'), ('Изменить данные', 'card:edit')], [('Пропустить задачу', 'task:skip'), ('Отменить всё', 'all:cancel')]])
+
+
+def admin_users_keyboard(users, page: int, pages: int) -> InlineKeyboardMarkup:
+    rows = []
+    for user in users:
+        if not user.is_admin:
+            action = "Отозвать" if user.is_active else "Выдать"
+            rows.append([(f"{action}: {user.telegram_user_id}", f"admin:toggle:{user.telegram_user_id}:{page}")])
+    navigation = []
+    if page > 0: navigation.append(("←", f"admin:page:{page - 1}"))
+    if page + 1 < pages: navigation.append(("→", f"admin:page:{page + 1}"))
+    if navigation: rows.append(navigation)
+    return keyboard(rows)
