@@ -39,7 +39,7 @@ class Settings:
         except ZoneInfoNotFoundError as exc:
             raise ConfigurationError("Неизвестная таймзона BOT_TIMEZONE") from exc
         try:
-            team = json.loads(os.getenv("TEAM_JSON", "{}"))
+            team = json.loads(os.getenv("TEAM_JSON", "{}").strip() or "{}")
             if not isinstance(team, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in team.items()):
                 raise ValueError
         except (json.JSONDecodeError, ValueError) as exc:
