@@ -25,7 +25,7 @@ def test_settings_parses_all_values(monkeypatch, tmp_path):
     configure(monkeypatch, TEAM_JSON=json.dumps({"Иван": "member"}), BOT_TIMEZONE="UTC", DATABASE_PATH=str(tmp_path / "db.sqlite"))
     settings = Settings.from_env()
     assert settings.admin_telegram_user_id == 10
-    assert settings.team == {"Иван": "member"}
+    assert settings.legacy_team == {"Иван": "member"}
     assert settings.timezone.key == "UTC"
     assert settings.database_path == tmp_path / "db.sqlite"
 
@@ -34,7 +34,7 @@ def test_settings_parses_all_values(monkeypatch, tmp_path):
 def test_invalid_team_json_is_clear(monkeypatch, value):
     configure(monkeypatch, TEAM_JSON=value)
     if value == "":
-        assert Settings.from_env().team == {}
+        assert Settings.from_env().legacy_team == {}
     else:
         with pytest.raises(ConfigurationError, match="TEAM_JSON"):
             Settings.from_env()

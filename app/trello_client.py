@@ -92,7 +92,16 @@ class TrelloClient:
         board_id = (await self.check_list()).get("idBoard")
         if not board_id:
             raise TrelloError("не удалось определить доску Trello")
-        return await self._request("GET", f"/boards/{board_id}/members", params={"fields": "id,fullName,username"})
+        members = await self._request("GET", f"/boards/{board_id}/members", params={"fields": "id,fullName,username"})
+        if not isinstance(members, list):
+            raise TrelloError("Trello вернул неожиданный список участников")
+        return members
+
+    async def get_member(self, member_id: str) -> dict[str, Any]:
+        member = next((item for item in await self.get_members() if item.get("id") == member_id), None)
+        if member is None:
+            raise TrelloError("участник с таким Trello Member ID не найден на доске")
+        return member
 
     async def get_card(self, card_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/cards/{card_id}", params={"fields": "id,name,url,due"})

@@ -14,11 +14,8 @@ def deadline_keyboard(found: bool) -> InlineKeyboardMarkup:
     return keyboard(rows + [[('Пропустить задачу', 'task:skip'), ('Отменить всё', 'all:cancel')]])
 
 
-def assignee_keyboard(team: dict[str, str]) -> InlineKeyboardMarkup:
-    names = list(team)
-    # Telegram limits callback_data to 64 UTF-8 bytes; names can be arbitrary
-    # Unicode strings, so callbacks carry stable indices rather than names.
-    rows = [[(names[index], f'assignee:pick:{index}') for index in range(i, min(i + 2, len(names)))] for i in range(0, len(names), 2)]
+def assignee_keyboard(users) -> InlineKeyboardMarkup:
+    rows = [[(user.trello_display_name, f'assignee:pick:{user.telegram_user_id}') for user in users[i:i + 2]] for i in range(0, len(users), 2)]
     rows += [[('Указать вручную', 'assignee:manual'), ('Без ответственного', 'assignee:none')], [('Назад', 'assignee:back')], [('Пропустить задачу', 'task:skip'), ('Отменить всё', 'all:cancel')]]
     return keyboard(rows)
 

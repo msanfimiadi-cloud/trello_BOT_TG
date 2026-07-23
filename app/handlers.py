@@ -54,6 +54,30 @@ class BotHandlers:
             await self.storage.touch_user(user.id, user.username, user.full_name)
             await update.effective_message.reply_text(f"Ваш Telegram user ID: {user.id}")
 
+    @access_required
+    async def trello_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = await self.storage.get_user(update.effective_user.id)
+        if not context.args:
+            if user and user.trello_member_id:
+                await update.effective_message.reply_text(
+                    f"Связь активна ✅\nTelegram: {user.telegram_user_id}\nTrello: {user.trello_display_name}\nMember ID: {user.trello_member_id}\n\nЧтобы изменить связь: /trello <member_id>"
+                )
+            else:
+                await update.effective_message.reply_text("Trello пока не привязан. Использование: /trello <member_id>")
+            return
+        if len(context.args) != 1:
+            await update.effective_message.reply_text("Использование: /trello <member_id>")
+            return
+        member_id = context.args[0].strip()
+        try:
+            member = await self.trello.get_member(member_id)
+            display_name = member.get("fullName") or member.get("username") or member_id
+            await self.storage.link_trello(update.effective_user.id, member_id, display_name)
+        except (TrelloError, ValueError) as exc:
+            await update.effective_message.reply_text(f"Не удалось привязать Trello: {exc}")
+            return
+        await update.effective_message.reply_text(f"Trello привязан ✅\n{display_name}\nMember ID: {member_id}")
+
     @admin_required
     async def admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         args = context.args
@@ -77,7 +101,8 @@ class BotHandlers:
         for user in users:
             label = user.full_name or (f"@{user.username}" if user.username else "без имени")
             status = "администратор" if user.is_admin else ("доступ есть" if user.is_active else "доступа нет")
-            lines.append(f"• {user.telegram_user_id} — {label} — {status}")
+            trello = user.trello_display_name or "Trello не привязан"
+            lines.append(f"• {user.telegram_user_id} — {label} — {status} — {trello}")
         markup = admin_users_keyboard(users, page, pages)
         if update.callback_query:
             await update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup)
@@ -164,18 +189,23 @@ class BotHandlers:
             if choice == "input": session.phase = "await_date"; await self.storage.save(session); await query.edit_message_reply_markup(None); await query.message.reply_text("Введите дату целиком: ДД.ММ, ДД.ММ.ГГ или ДД.ММ.ГГГГ"); return
             if choice == "none": task.deadline, task.no_deadline = None, True
             elif choice != "confirm": task.deadline, task.no_deadline = parse_date(choice, self.settings.timezone).isoformat(), False
-            session.phase = "assignee"; await self.storage.save(session); await query.edit_message_reply_markup(None); await query.message.reply_text("Кто ответственный?", reply_markup=assignee_keyboard(self.settings.team)); return
+            session.phase = "assignee"; await self.storage.save(session); await query.edit_message_reply_markup(None); await self._ask_assignee(query.message); return
         if data.startswith("assignee:"):
             choice = data.split(":", 1)[1]
             if choice == "back": await self.show_task(update, session); return
-            if choice == "change": await query.message.reply_text("Кто ответственный?", reply_markup=assignee_keyboard(self.settings.team)); return
+            if choice == "change": await self._ask_assignee(query.message); return
             if choice == "manual": session.phase = "await_assignee"; await self.storage.save(session); await query.edit_message_reply_markup(None); await query.message.reply_text("Введите имя. Оно будет записано только в описание карточки."); return
             if choice.startswith("pick:"):
                 try:
-                    choice = list(self.settings.team)[int(choice.split(":", 1)[1])]
-                except (ValueError, IndexError):
-                    await query.message.reply_text("Список ответственных изменился. Выберите ещё раз.", reply_markup=assignee_keyboard(self.settings.team)); return
-            task.assignee = None if choice == "none" else choice; task.member_id = self.settings.team.get(choice); task.manual_assignee = False
+                    selected = await self.storage.get_user(int(choice.split(":", 1)[1]))
+                except ValueError:
+                    selected = None
+                if not selected or not selected.is_active or not selected.trello_member_id:
+                    await query.message.reply_text("Связь пользователя изменилась. Выберите ещё раз."); await self._ask_assignee(query.message); return
+                task.assignee, task.member_id = selected.trello_display_name, selected.trello_member_id
+            else:
+                task.assignee, task.member_id = None, None
+            task.manual_assignee = False
             session.phase = "confirm"; await self.storage.save(session); await query.edit_message_reply_markup(None); await self.show_confirmation(update, session); return
         if data == "card:edit": await self.show_task(update, session); return
         if data == "card:create": await self.create_card(update, session)
@@ -186,7 +216,12 @@ class BotHandlers:
             await update.effective_message.reply_text(f"Некорректная дата: {exc}. Попробуйте ещё раз."); return
         task = session.tasks[session.current_index]; task.deadline, task.no_deadline = (deadline.isoformat() if deadline else None), deadline is None
         session.phase = "assignee"; await self.storage.save(session)
-        await update.effective_message.reply_text(f"Итоговая дата: {display_date(deadline)}\n\nКто ответственный?", reply_markup=assignee_keyboard(self.settings.team))
+        await update.effective_message.reply_text(f"Итоговая дата: {display_date(deadline)}")
+        await self._ask_assignee(update.effective_message)
+
+    async def _ask_assignee(self, message) -> None:
+        users = await self.storage.list_linked_users()
+        await message.reply_text("Кто ответственный?", reply_markup=assignee_keyboard(users))
 
     async def show_task(self, update: Update, session: Session) -> None:
         task = session.tasks[session.current_index]; session.phase = "deadline"; await self.storage.save(session)

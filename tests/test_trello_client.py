@@ -29,6 +29,9 @@ async def test_authorization_list_members_and_card():
     assert (await client.check_authorization())["id"] == "me"
     assert (await client.check_ready())["name"] == "Tasks"
     assert (await client.get_members())[0]["id"] == "member"
+    assert (await client.get_member("member"))["fullName"] == "Name"
+    with pytest.raises(TrelloError, match="не найден"):
+        await client.get_member("missing")
     assert (await client.get_card("card"))["id"] == "card"
     await client.close()
 
