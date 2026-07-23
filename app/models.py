@@ -14,7 +14,7 @@ class Task:
     assignee: str | None = None
     member_id: str | None = None
     manual_assignee: bool = False
-    status: str = "pending"
+    status: str = "pending"  # pending, creating, created, skipped, failed
     card_id: str | None = None
     card_url: str | None = None
     created_at: str | None = None

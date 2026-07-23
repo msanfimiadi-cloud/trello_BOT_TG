@@ -28,7 +28,21 @@ class Storage:
 
     async def load(self, user_id: int) -> Session | None:
         rows = await asyncio.to_thread(self._execute, "SELECT data FROM sessions WHERE user_id=? AND active=1", (user_id,))
-        return Session.from_dict(json.loads(rows[0][0])) if rows else None
+        if not rows:
+            return None
+        session = Session.from_dict(json.loads(rows[0][0]))
+        # A process may die after persisting `creating`, while the remote result is
+        # unknowable.  Never retry automatically: expose it as a failed task so a
+        # human can decide whether to retry after checking Trello.
+        changed = False
+        for task in session.tasks:
+            if task.status == "creating":
+                task.status = "failed"
+                task.last_error = "Создание было прервано; проверьте Trello перед повтором"
+                changed = True
+        if changed:
+            await self.save(session)
+        return session
 
     async def cancel(self, user_id: int) -> None:
         await asyncio.to_thread(self._execute, "UPDATE sessions SET active=0,updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (user_id,))

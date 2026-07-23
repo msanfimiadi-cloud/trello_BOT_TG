@@ -109,6 +109,11 @@ class BotHandlers:
             if choice == "back": await self.show_task(update, session); return
             if choice == "change": await query.message.reply_text("Кто ответственный?", reply_markup=assignee_keyboard(self.settings.team)); return
             if choice == "manual": session.phase = "await_assignee"; await self.storage.save(session); await query.edit_message_reply_markup(None); await query.message.reply_text("Введите имя. Оно будет записано только в описание карточки."); return
+            if choice.startswith("pick:"):
+                try:
+                    choice = list(self.settings.team)[int(choice.split(":", 1)[1])]
+                except (ValueError, IndexError):
+                    await query.message.reply_text("Список ответственных изменился. Выберите ещё раз.", reply_markup=assignee_keyboard(self.settings.team)); return
             task.assignee = None if choice == "none" else choice; task.member_id = self.settings.team.get(choice); task.manual_assignee = False
             session.phase = "confirm"; await self.storage.save(session); await query.edit_message_reply_markup(None); await self.show_confirmation(update, session); return
         if data == "card:edit": await self.show_task(update, session); return
@@ -138,12 +143,17 @@ class BotHandlers:
         task = session.tasks[session.current_index]
         async with self.storage.creation_lock(task.uuid):
             latest = await self.storage.load(session.user_id); task = latest.tasks[latest.current_index]; session = latest
-            if task.status == "created": await update.callback_query.answer("Карточка уже создана", show_alert=True); return
+            if session.phase != "confirm":
+                await update.effective_message.reply_text("Эта кнопка уже устарела. Используйте актуальные кнопки ниже.")
+                return
+            if task.status == "created":
+                await update.effective_message.reply_text("Карточка уже создана.")
+                return
             await update.callback_query.edit_message_reply_markup(None); task.status = "creating"; await self.storage.save(session)
             try:
                 card = await self.trello.create_card(card_title(task.text), card_description(session.meeting_title, task.text, task.assignee if task.manual_assignee else None), task.deadline, task.member_id)
             except TrelloError as exc:
-                task.status, task.last_error = "error", str(exc); await self.storage.save(session)
+                task.status, task.last_error = "failed", str(exc); await self.storage.save(session)
                 logger.exception("card_create_failed user_id=%s task_uuid=%s error_class=%s", session.user_id, task.uuid, type(exc).__name__)
                 await update.effective_message.reply_text(f"Не удалось создать карточку в Trello.\n\nПричина: {exc}", reply_markup=retry_keyboard()); return
             task.status, task.card_id, task.card_url, task.created_at, task.last_error = "created", card["id"], card.get("url") or card.get("shortUrl"), datetime.now(self.settings.timezone).isoformat(), None
@@ -154,7 +164,7 @@ class BotHandlers:
     async def _advance(self, update: Update, session: Session) -> None:
         session.current_index += 1
         if session.current_index < len(session.tasks): await self.storage.save(session); await self.show_task(update, session); return
-        created = [t for t in session.tasks if t.status == "created"]; skipped = sum(t.status == "skipped" for t in session.tasks); errors = sum(t.status == "error" for t in session.tasks)
+        created = [t for t in session.tasks if t.status == "created"]; skipped = sum(t.status == "skipped" for t in session.tasks); errors = sum(t.status == "failed" for t in session.tasks)
         lines = ["Готово ✅", "", f"Встреча: {session.meeting_title}", f"Найдено задач: {len(session.tasks)}", f"Создано карточек: {len(created)}", f"Пропущено: {skipped}", f"Ошибок: {errors}"]
         lines += [f"• <a href=\"{escape(t.card_url)}\">{escape(card_title(t.text))}</a>" for t in created if t.card_url]
         await self.storage.cancel(session.user_id)
