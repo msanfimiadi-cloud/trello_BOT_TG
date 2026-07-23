@@ -20,7 +20,7 @@ class Settings:
     admin_telegram_user_id: int
     timezone: ZoneInfo
     database_path: Path = Path("data/bot.sqlite3")
-    team: dict[str, str] = field(default_factory=dict)
+    legacy_team: dict[str, str] = field(default_factory=dict, repr=False)
     legacy_allowed_user_ids: frozenset[int] = field(default_factory=frozenset, repr=False)
 
     @classmethod

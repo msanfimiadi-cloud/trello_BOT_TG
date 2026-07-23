@@ -1,4 +1,5 @@
 from app.keyboards import assignee_keyboard, confirmation_keyboard, deadline_keyboard, preview_keyboard, retry_keyboard
+from app.storage import User
 
 
 def test_all_callback_data_fits_telegram_limit():
@@ -6,7 +7,7 @@ def test_all_callback_data_fits_telegram_limit():
         preview_keyboard(),
         deadline_keyboard(True),
         deadline_keyboard(False),
-        assignee_keyboard({"Очень длинное имя сотрудника 🚀" * 20: "member"}),
+        assignee_keyboard([User(123456789, None, None, True, False, "", "", "member", "Очень длинное имя сотрудника 🚀" * 20)]),
         confirmation_keyboard(),
         retry_keyboard(),
     ]
