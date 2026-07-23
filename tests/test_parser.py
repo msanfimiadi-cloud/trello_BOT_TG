@@ -37,3 +37,8 @@ def test_description_with_and_without_manual_assignee():
     base = card_description("Митинг", "Полный\nтекст")
     assert base == "Из встречи: Митинг\n\nИсходный текст:\nПолный\nтекст"
     assert card_description("Митинг", "Текст", "Иван").endswith("Ответственный, указанный вручную:\nИван")
+
+
+def test_description_can_include_stable_task_reference():
+    description = card_description("Митинг", "Текст", task_reference="task-uuid")
+    assert description.endswith("Системный ID задачи: task-uuid")
